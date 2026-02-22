@@ -1,0 +1,9 @@
+# Stage 3: stage_2 + FastAPI server for confirmed reservations
+langchain>=0.0.200
+langchain-openai
+openai
+python-dotenv
+pydantic>=1.0,<2
+deeplake
+fastapi
+uvicorn[standard]
