@@ -1,0 +1,17 @@
+# Stage 4: pinned to match your installed environment (see terminal pip freeze).
+# Extras: langchain-core, langgraph, fastapi, uvicorn (install after the base set if needed).
+
+# Exact versions from your env
+pydantic==1.10.26
+langchain==0.0.208
+openai==0.27.8
+python-dotenv==1.2.1
+deeplake==3.9.27
+tiktoken==0.12.0
+certifi==2026.1.4
+
+# Stage 4 graph + server (compatible with above)
+langchain-core>=0.1.42,<0.2.0
+langgraph==0.0.35
+fastapi>=0.95.2,<0.100.0
+uvicorn[standard]
