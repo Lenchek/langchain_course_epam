@@ -1,10 +1,10 @@
-"""SQLite database for dynamic parking data (hours, prices, availability)."""
+"""SQLite: dynamic parking data + reservation requests (Stage 2 human-in-the-loop)."""
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
-from config import SQLITE_PATH
+from config import SQLITE_PATH, DATA_DIR
 from data_gen import get_dynamic_fixture
 
 
@@ -32,10 +32,8 @@ def db_session():
 
 
 def init_db():
-    """Create tables and seed with generated dynamic data."""
     with db_session() as conn:
         c = conn.cursor()
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS working_hours (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +42,6 @@ def init_db():
                 close_time TEXT NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS prices (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,7 +51,6 @@ def init_db():
                 day_max REAL NOT NULL
             )
         """)
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS availability (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,8 +60,22 @@ def init_db():
                 available INTEGER NOT NULL DEFAULT 1
             )
         """)
+        # Stage 2: reservation requests for human-in-the-loop
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS reservation_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                surname TEXT NOT NULL,
+                car_number TEXT NOT NULL,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                admin_comment TEXT,
+                created_at TEXT NOT NULL,
+                decided_at TEXT
+            )
+        """)
 
-        # Seed if empty
         c.execute("SELECT COUNT(*) FROM working_hours")
         if c.fetchone()[0] == 0:
             fixture = get_dynamic_fixture()
@@ -79,7 +89,6 @@ def init_db():
                     "INSERT INTO prices (space_type, first_hour, next_hours, day_max) VALUES (?, ?, ?, ?)",
                     (row["type"], row["first_hour"], row["next_hours"], row["day_max"]),
                 )
-            # Seed some availability for next 7 days, 24 hours each, sample spaces
             today = date.today()
             for space_id in range(1, 11):
                 for d in range(7):
@@ -92,7 +101,6 @@ def init_db():
 
 
 def get_working_hours():
-    """Return list of dicts: day, open_time, close_time."""
     with db_session() as conn:
         c = conn.cursor()
         c.execute("SELECT day, open_time, close_time FROM working_hours ORDER BY id")
@@ -100,18 +108,13 @@ def get_working_hours():
 
 
 def get_prices():
-    """Return list of dicts: space_type, first_hour, next_hours, day_max."""
     with db_session() as conn:
         c = conn.cursor()
         c.execute("SELECT space_type, first_hour, next_hours, day_max FROM prices")
-        return [
-            {"type": r[0], "first_hour": r[1], "next_hours": r[2], "day_max": r[3]}
-            for r in c.fetchall()
-        ]
+        return [{"type": r[0], "first_hour": r[1], "next_hours": r[2], "day_max": r[3]} for r in c.fetchall()]
 
 
 def get_availability_summary(date_str: str):
-    """Return counts of available vs total slots for a given date (YYYY-MM-DD)."""
     with db_session() as conn:
         c = conn.cursor()
         c.execute(
@@ -124,9 +127,65 @@ def get_availability_summary(date_str: str):
         return {"available": available, "total": total, "date": date_str}
 
 
+# ---------- Reservation requests (Stage 2) ----------
+
+def create_reservation_request(name: str, surname: str, car_number: str, period_start: str, period_end: str) -> int:
+    """Insert a pending reservation request. Returns request id."""
+    with db_session() as conn:
+        c = conn.cursor()
+        c.execute(
+            """INSERT INTO reservation_requests
+               (name, surname, car_number, period_start, period_end, status, created_at)
+               VALUES (?, ?, ?, ?, ?, 'pending', ?)""",
+            (name, surname, car_number, period_start, period_end, datetime.utcnow().isoformat()),
+        )
+        return c.lastrowid
+
+
+def get_pending_reservation_requests():
+    """Return list of dicts for pending requests (for admin)."""
+    with db_session() as conn:
+        c = conn.cursor()
+        c.execute(
+            """SELECT id, name, surname, car_number, period_start, period_end, created_at
+               FROM reservation_requests WHERE status = 'pending' ORDER BY created_at"""
+        )
+        return [
+            {
+                "id": r[0], "name": r[1], "surname": r[2], "car_number": r[3],
+                "period_start": r[4], "period_end": r[5], "created_at": r[6],
+            }
+            for r in c.fetchall()
+        ]
+
+
+def set_reservation_status(request_id: int, status: str, admin_comment: str = None):
+    """Set status to 'approved' or 'refused'."""
+    if status not in ("approved", "refused"):
+        raise ValueError("status must be 'approved' or 'refused'")
+    with db_session() as conn:
+        c = conn.cursor()
+        c.execute(
+            """UPDATE reservation_requests SET status = ?, admin_comment = ?, decided_at = ?
+               WHERE id = ?""",
+            (status, admin_comment or "", datetime.utcnow().isoformat(), request_id),
+        )
+
+
+def get_reservation_status(request_id: int):
+    """Return dict with status and optional admin_comment, or None if not found."""
+    with db_session() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT status, admin_comment, period_start, period_end FROM reservation_requests WHERE id = ?",
+            (request_id,),
+        )
+        row = c.fetchone()
+        if not row:
+            return None
+        return {"status": row[0], "admin_comment": row[1] or "", "period_start": row[2], "period_end": row[3]}
+
+
 if __name__ == "__main__":
     init_db()
-    print("SQLite DB initialized at", SQLITE_PATH)
-    print("Working hours:", get_working_hours())
-    print("Prices:", get_prices())
-    print("Availability sample (today):", get_availability_summary(date.today().isoformat()))
+    print("DB initialized at", SQLITE_PATH)
